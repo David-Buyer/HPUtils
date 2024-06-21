@@ -1,4 +1,4 @@
-module HPUtils
+module github.com/David-Buyer/HPUtils
 
 go 1.21.0
 
