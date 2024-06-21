@@ -1,3 +1,6 @@
+:: Usage: build.bat <version_number>
+:: ex: > build 1.0.0.0
+
 @echo off
 setlocal
 
