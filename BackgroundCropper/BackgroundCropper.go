@@ -31,9 +31,11 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
+	"math"
 
 	_ "github.com/disintegration/imaging"
 	"golang.org/x/image/bmp"
+	"github.com/David-Buyer/HPUtils/common"
 )
 
 var onProcessing func(int)
@@ -47,6 +49,78 @@ var stopWorker  chan struct{}
 func CFree(ptr *C.uint8_t) {
 	close(stopWorker) // Ferma il worker
     C.free(unsafe.Pointer(ptr))
+}
+
+
+func findMaxDensityCenter(data []byte, windowSize int, step int) [2]int {
+    img, _, err := image.Decode(bytes.NewReader(data))
+    if err != nil {
+        log.Fatalf("failed to decode image: %v", err)
+    }
+    bounds := img.Bounds()
+    width, height := bounds.Max.X, bounds.Max.Y
+
+    // Crea e popola l'immagine integrale
+    integral := make([][]int, height+1)
+    for i := range integral {
+        integral[i] = make([]int, width+1)
+    }
+
+    for y := 1; y <= height; y++ {
+        for x := 1; x <= width; x++ {
+            r, g, b, _ := img.At(x-1, y-1).RGBA()
+            pixelValue := 0
+            if r>>8 < 250 && g>>8 < 250 && b>>8 < 250 {
+                pixelValue = 1
+            }
+            integral[y][x] = pixelValue + integral[y-1][x] + integral[y][x-1] - integral[y-1][x-1]
+        }
+    }
+
+    maxDensity := -1
+    var maxDensityCenter [2]int
+	var totalDensity int
+    var windowCount int
+
+    // Mappa per memorizzare le densità e le rispettive coordinate
+    densityMap := make(map[int][][2]int)
+
+    // Utilizza l'immagine integrale per calcolare la densità in ogni finestra mobile
+    for y := 0; y <= height-windowSize; y += step {
+        for x := 0; x <= width-windowSize; x += step {
+            x1, y1 := x, y
+            x2, y2 := x+windowSize, y+windowSize
+            density := integral[y2][x2] - integral[y1][x2] - integral[y2][x1] + integral[y1][x1]
+            
+			if density > maxDensity {
+				totalDensity += density
+            	windowCount++
+
+        		// Aggiungi le coordinate alla mappa della densità
+            	densityMap[density] = append(densityMap[density], [2]int{x, y})
+                maxDensity = density
+                maxDensityCenter = [2]int{x, y}
+            }
+        }
+    }
+
+	averageDensity := float64(totalDensity) / float64(windowCount)
+
+    closestDensity := maxDensity
+    minDiff := float64(maxDensity)
+    for density := range densityMap {
+        diff := math.Abs(float64(density) - averageDensity)
+        if diff < minDiff {
+            minDiff = diff
+            closestDensity = density
+        }
+    }
+
+    // Prendi una delle coordinate associate alla densità più vicina alla media
+    averageDensityCenter := densityMap[closestDensity][0]
+
+    log.Printf("Max density center: (%d, %d) with density %d", maxDensityCenter[0], maxDensityCenter[1], maxDensity)
+    return averageDensityCenter
 }
 
 //export SetProcessingCallback
@@ -77,16 +151,26 @@ func RaiseOnProcessing(progress int) {
     default:
     }
 }
+
+
+func CropFaceFromBackgroundWrapper(data *common.Uint8, length common.Int, resultLength *common.Int, bnActivationThreshold common.Float, centerOffset *common.Int, result *common.Int) *C.uint8_t {
+	return CropFaceFromBackground((*C.uint8_t)(data), (C.int)(length), (*C.int)(resultLength), (C.float)(bnActivationThreshold), (*C.int)(centerOffset), (*C.int)(result))
+}
+
 //export CropFaceFromBackground
-func CropFaceFromBackground(data *C.uint8_t, length C.int, resultLength *C.int) *C.uint8_t {
+func CropFaceFromBackground(data *C.uint8_t, length C.int, resultLength *C.int, bnActivationThreshold C.float, centerOffset *C.int, result *C.int) *C.uint8_t {
 	otsuOffset := 30
+	centerOffsetArray := (*[2]C.int)(unsafe.Pointer(centerOffset))
 	byteArray := C.GoBytes(unsafe.Pointer(data), length)
 	img, _, err := image.Decode(bytes.NewReader(byteArray))
 	if err != nil {
 		log.Fatalf("failed to decode image: %v", err)
 	}
 
-	if IsBNColorRatio(img, 50, true) {
+	*result = 1
+
+	if IsBNColorRatio(img, float32(bnActivationThreshold), true) {
+		*result = 0
 		threshold := OtsuThreshold(img)
 		binarizedImg := BinarizeImage(img, threshold, otsuOffset)
 		faceRectangle := FindLargestBlob(binarizedImg)
@@ -97,10 +181,19 @@ func CropFaceFromBackground(data *C.uint8_t, length C.int, resultLength *C.int) 
 			if err != nil {
 				log.Fatalf("failed to encode cropped image: %v", err)
 			}
-			*resultLength = C.int(len(buf))
-			return (*C.uint8_t)(C.CBytes(buf))
+			
+			length = C.int(len(buf))
+			byteArray = buf;
 		}
 	}
+
+	radius := 100 // Modificabile secondo le necessità
+	center := findMaxDensityCenter(byteArray, radius, 20)
+
+	// Imposta i valori di centerOffset
+	centerOffsetArray[0] = C.int(center[0])
+	centerOffsetArray[1] = C.int(center[1])
+	
 
 	*resultLength = length
 	return (*C.uint8_t)(C.CBytes(byteArray))
@@ -200,7 +293,7 @@ func BinarizeImage(img image.Image, threshold int, otsuOffset int) image.Image {
     wg.Wait()
 
 	// Salvo l'immagine binarizzata in un file per debugging
-	//saveImage(output, "binarized_image.png")
+	saveImage(output, "binarized_image.png")
 
     if IsBNColorRatio(output, 100.0, false) {
         return BinarizeImage(img, threshold, max(0, otsuOffset-10))

@@ -1,33 +1,49 @@
 package main
 
+/*
+#include <stdint.h>
+#include <stdlib.h>
+
+*/
+//import "C"
+
 import (
+	
+	_ "log"
+	_ "os"
+	_ "unsafe"
+
 	_ "github.com/David-Buyer/HPUtils/backgroundcropper"
+	_ "github.com/David-Buyer/HPUtils/common"
 )
 
 func main() {
 
 	// Esempio di utilizzo
 
-	// Leggp il file immagine in byte array
-	/* imgBytes, err := os.ReadFile("C:\\IPZS_PE\\test_1.jpg")
+	// Leggo il file immagine in byte array
+	/*imgBytes, err := os.ReadFile("C:\\IPZS_PE\\test_1.jpg")
 	if err != nil {
 		log.Fatalf("failed to read image file: %v", err)
 	}
 
 	// Converto il byte array in un puntatore C
-	imgPtr := (*C.uint8_t)(C.CBytes(imgBytes))
-	defer C.free(unsafe.Pointer(imgPtr))
+	imgPtr := common.CBytes(imgBytes)
+    defer common.Free(unsafe.Pointer(imgPtr))
 
-	var length C.int
-	// Chiamo la funzione Go per elaborare l'immagine
-	resultPtr := CropFaceFromBackground(imgPtr, C.int(len(imgBytes)), &length)
-	resultBytes := C.GoBytes(unsafe.Pointer(resultPtr), length)
+    var length common.Int
+    var threshold common.Float = 100 // Imposta un valore di soglia
+    var center [2]common.Int
+
+    // Chiamo la funzione Go per elaborare l'immagine
+    resultPtr := backgroundcropper.CropFaceFromBackgroundWrapper(imgPtr, common.Int(len(imgBytes)), &length, threshold, &center[0])
+    resultBytes := common.GoBytes(unsafe.Pointer(resultPtr), int(length))
 
 	// Scrivo il risultato in un nuovo file immagine
-	err = os.WriteFile("cropped_image.bmp", resultBytes, 0644)
+	err = os.WriteFile("C:\\IPZS_PE\\cropped_image.bmp", resultBytes, 0644)
 	if err != nil {
 		log.Fatalf("failed to write cropped image file: %v", err)
 	}
 
-	log.Println("Cropped image saved to: cropped_image.bmp") */
+	log.Println("Cropped image saved to: cropped_image.bmp")*/
 }
