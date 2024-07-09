@@ -1,5 +1,6 @@
 :: Usage: build.bat <version_number>
 :: ex: > build 1.0.0.0
+:: Compilare con go build -o HPUtils.dll -buildmode=c-shared senza specificare il main.go, per includere i file di risorse *.rc ( nel caso specifico il file version.rc per le info sulla versione )
 
 @echo off
 setlocal

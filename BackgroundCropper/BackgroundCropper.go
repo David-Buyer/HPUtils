@@ -293,7 +293,7 @@ func BinarizeImage(img image.Image, threshold int, otsuOffset int) image.Image {
     wg.Wait()
 
 	// Salvo l'immagine binarizzata in un file per debugging
-	saveImage(output, "binarized_image.png")
+	//saveImage(output, "binarized_image.png")
 
     if IsBNColorRatio(output, 100.0, false) {
         return BinarizeImage(img, threshold, max(0, otsuOffset-10))
