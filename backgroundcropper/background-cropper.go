@@ -26,16 +26,16 @@ import (
 	"image/draw"
 	"image/png"
 	"log"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
-	"math"
 
+	"github.com/David-Buyer/HPUtils/common"
 	_ "github.com/disintegration/imaging"
 	"golang.org/x/image/bmp"
-	"github.com/David-Buyer/HPUtils/common"
 )
 
 var onProcessing func(int)
@@ -43,115 +43,113 @@ var percCompletion float32 = 0
 var forcedRatio float32 = 1.33
 var processingCallback C.ProcessingCallback
 var progressQueue chan int
-var stopWorker  chan struct{}
+var stopWorker chan struct{}
 
 //export CFree
 func CFree(ptr *C.uint8_t) {
 	close(stopWorker) // Ferma il worker
-    C.free(unsafe.Pointer(ptr))
+	C.free(unsafe.Pointer(ptr))
 }
 
-
 func findMaxDensityCenter(data []byte, windowSize int, step int) [2]int {
-    img, _, err := image.Decode(bytes.NewReader(data))
-    if err != nil {
-        log.Fatalf("failed to decode image: %v", err)
-    }
-    bounds := img.Bounds()
-    width, height := bounds.Max.X, bounds.Max.Y
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		log.Fatalf("failed to decode image: %v", err)
+	}
+	bounds := img.Bounds()
+	width, height := bounds.Max.X, bounds.Max.Y
 
-    // Crea e popola l'immagine integrale
-    integral := make([][]int, height+1)
-    for i := range integral {
-        integral[i] = make([]int, width+1)
-    }
+	// Crea e popola l'immagine integrale
+	integral := make([][]int, height+1)
+	for i := range integral {
+		integral[i] = make([]int, width+1)
+	}
 
-    for y := 1; y <= height; y++ {
-        for x := 1; x <= width; x++ {
-            r, g, b, _ := img.At(x-1, y-1).RGBA()
-            pixelValue := 0
-            if r>>8 < 250 && g>>8 < 250 && b>>8 < 250 {
-                pixelValue = 1
-            }
-            integral[y][x] = pixelValue + integral[y-1][x] + integral[y][x-1] - integral[y-1][x-1]
-        }
-    }
+	for y := 1; y <= height; y++ {
+		for x := 1; x <= width; x++ {
+			r, g, b, _ := img.At(x-1, y-1).RGBA()
+			pixelValue := 0
+			if r>>8 < 250 && g>>8 < 250 && b>>8 < 250 {
+				pixelValue = 1
+			}
+			integral[y][x] = pixelValue + integral[y-1][x] + integral[y][x-1] - integral[y-1][x-1]
+		}
+	}
 
-    maxDensity := -1
-    var maxDensityCenter [2]int
+	maxDensity := -1
+	var maxDensityCenter [2]int
 	var totalDensity int
-    var windowCount int
+	var windowCount int
 
-    // Mappa per memorizzare le densità e le rispettive coordinate
-    densityMap := make(map[int][][2]int)
+	// Mappa per memorizzare le densità e le rispettive coordinate
+	densityMap := make(map[int][][2]int)
 
-    // Utilizza l'immagine integrale per calcolare la densità in ogni finestra mobile
-    for y := 0; y <= height-windowSize; y += step {
-        for x := 0; x <= width-windowSize; x += step {
-            x1, y1 := x, y
-            x2, y2 := x+windowSize, y+windowSize
-            density := integral[y2][x2] - integral[y1][x2] - integral[y2][x1] + integral[y1][x1]
-            
+	// Utilizza l'immagine integrale per calcolare la densità in ogni finestra mobile
+	for y := 0; y <= height-windowSize; y += step {
+		for x := 0; x <= width-windowSize; x += step {
+			x1, y1 := x, y
+			x2, y2 := x+windowSize, y+windowSize
+			density := integral[y2][x2] - integral[y1][x2] - integral[y2][x1] + integral[y1][x1]
+
 			if density > maxDensity {
 				totalDensity += density
-            	windowCount++
+				windowCount++
 
-        		// Aggiungi le coordinate alla mappa della densità
-            	densityMap[density] = append(densityMap[density], [2]int{x, y})
-                maxDensity = density
-                maxDensityCenter = [2]int{x, y}
-            }
-        }
-    }
+				// Aggiungi le coordinate alla mappa della densità
+				densityMap[density] = append(densityMap[density], [2]int{x, y})
+				maxDensity = density
+				maxDensityCenter = [2]int{x, y}
+			}
+		}
+	}
 
 	averageDensity := float64(totalDensity) / float64(windowCount)
 
-    closestDensity := maxDensity
-    minDiff := float64(maxDensity)
-    for density := range densityMap {
-        diff := math.Abs(float64(density) - averageDensity)
-        if diff < minDiff {
-            minDiff = diff
-            closestDensity = density
-        }
-    }
+	closestDensity := maxDensity
+	minDiff := float64(maxDensity)
+	for density := range densityMap {
+		diff := math.Abs(float64(density) - averageDensity)
+		if diff < minDiff {
+			minDiff = diff
+			closestDensity = density
+		}
+	}
 
-    // Prendi una delle coordinate associate alla densità più vicina alla media
-    averageDensityCenter := densityMap[closestDensity][0]
+	// Prendi una delle coordinate associate alla densità più vicina alla media
+	averageDensityCenter := densityMap[closestDensity][0]
 
-    log.Printf("Max density center: (%d, %d) with density %d", maxDensityCenter[0], maxDensityCenter[1], maxDensity)
-    return averageDensityCenter
+	log.Printf("Max density center: (%d, %d) with density %d", maxDensityCenter[0], maxDensityCenter[1], maxDensity)
+	return averageDensityCenter
 }
 
 //export SetProcessingCallback
 func SetProcessingCallback(callback C.ProcessingCallback) {
-    processingCallback = callback
-    log.Println("Callback set")
-    progressQueue = make(chan int, 100)
-    stopWorker = make(chan struct{})
+	processingCallback = callback
+	log.Println("Callback set")
+	progressQueue = make(chan int, 100)
+	stopWorker = make(chan struct{})
 
-    // Avvia un worker per processare la coda di progressi
-    go func() {
-        for {
-            select {
-            case progress := <-progressQueue:
-                if processingCallback != nil {
-                    C.callProcessingCallback(processingCallback, C.int(progress))
-                }
-            case <-stopWorker:
-                return
-            }
-        }
-    }()
+	// Avvia un worker per processare la coda di progressi
+	go func() {
+		for {
+			select {
+			case progress := <-progressQueue:
+				if processingCallback != nil {
+					C.callProcessingCallback(processingCallback, C.int(progress))
+				}
+			case <-stopWorker:
+				return
+			}
+		}
+	}()
 }
 
 func RaiseOnProcessing(progress int) {
-    select {
-    case progressQueue <- progress:
-    default:
-    }
+	select {
+	case progressQueue <- progress:
+	default:
+	}
 }
-
 
 func CropFaceFromBackgroundWrapper(data *common.Uint8, length common.Int, resultLength *common.Int, bnActivationThreshold common.Float, centerOffset *common.Int, result *common.Int) *C.uint8_t {
 	return CropFaceFromBackground((*C.uint8_t)(data), (C.int)(length), (*C.int)(resultLength), (C.float)(bnActivationThreshold), (*C.int)(centerOffset), (*C.int)(result))
@@ -181,9 +179,9 @@ func CropFaceFromBackground(data *C.uint8_t, length C.int, resultLength *C.int, 
 			if err != nil {
 				log.Fatalf("failed to encode cropped image: %v", err)
 			}
-			
+
 			length = C.int(len(buf))
-			byteArray = buf;
+			byteArray = buf
 		}
 	}
 
@@ -193,7 +191,6 @@ func CropFaceFromBackground(data *C.uint8_t, length C.int, resultLength *C.int, 
 	// Imposta i valori di centerOffset
 	centerOffsetArray[0] = C.int(center[0])
 	centerOffsetArray[1] = C.int(center[1])
-	
 
 	*resultLength = length
 	return (*C.uint8_t)(C.CBytes(byteArray))
@@ -263,43 +260,43 @@ func saveImage(img image.Image, filePath string) error {
 }
 
 func BinarizeImage(img image.Image, threshold int, otsuOffset int) image.Image {
-    bounds := img.Bounds()
-    output := image.NewNRGBA(bounds)
+	bounds := img.Bounds()
+	output := image.NewNRGBA(bounds)
 
-    var wg sync.WaitGroup
+	var wg sync.WaitGroup
 
-    for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-        wg.Add(1)
-        go func(y int) {
-            defer wg.Done()
-            for x := bounds.Min.X; x < bounds.Max.X; x++ {
-                r, g, b, _ := img.At(x, y).RGBA()
-                r8, g8, b8 := uint8(r>>8), uint8(g>>8), uint8(b>>8)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		wg.Add(1)
+		go func(y int) {
+			defer wg.Done()
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				r, g, b, _ := img.At(x, y).RGBA()
+				r8, g8, b8 := uint8(r>>8), uint8(g>>8), uint8(b>>8)
 
-                // Calcolo con i coefficienti standard di conversione YUV
-                gray := (int(r8)*299 + int(g8)*587 + int(b8)*114) / 1000
+				// Calcolo con i coefficienti standard di conversione YUV
+				gray := (int(r8)*299 + int(g8)*587 + int(b8)*114) / 1000
 
-                var binColor color.NRGBA
-                if gray < threshold+otsuOffset {
-                    binColor = color.NRGBA{0, 0, 0, 255} // Nero
-                } else {
-                    binColor = color.NRGBA{255, 255, 255, 255} // Bianco
-                }
-                output.Set(x, y, binColor)
-            }
-        }(y)
-    }
+				var binColor color.NRGBA
+				if gray < threshold+otsuOffset {
+					binColor = color.NRGBA{0, 0, 0, 255} // Nero
+				} else {
+					binColor = color.NRGBA{255, 255, 255, 255} // Bianco
+				}
+				output.Set(x, y, binColor)
+			}
+		}(y)
+	}
 
-    wg.Wait()
+	wg.Wait()
 
 	// Salvo l'immagine binarizzata in un file per debugging
-	//saveImage(output, "binarized_image.png")
+	//saveImage(output, "C:\\IPZS_PE\\binarized_image.png")
 
-    if IsBNColorRatio(output, 100.0, false) {
-        return BinarizeImage(img, threshold, max(0, otsuOffset-10))
-    }
+	if IsBNColorRatio(output, 100.0, false) {
+		return BinarizeImage(img, threshold, max(0, otsuOffset-10))
+	}
 
-    return output
+	return output
 }
 
 func OtsuThreshold(img image.Image) int {
@@ -350,41 +347,45 @@ func OtsuThreshold(img image.Image) int {
 }
 
 func FindLargestBlob(img image.Image) image.Rectangle {
+	searchDistance := 5
+	dilateRadius := 10
+
 	start := time.Now()
-    bounds := img.Bounds()
-    width := bounds.Dx()
-    height := bounds.Dy()
-    labels := make([][]int, width)
-    for i := range labels {
-        labels[i] = make([]int, height)
-    }
-    uf := NewUnionFind(width * height)
-    var labelCount int32 = 1
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	labels := make([][]int, width)
+	for i := range labels {
+		labels[i] = make([]int, height)
+	}
+	uf := NewUnionFind(width * height)
+	var labelCount int32 = 1
 
-    unitPerc := 87.0 / float32(width)
+	unitPerc := 87.0 / float32(width)
+	preProcessedImage := erodeAndDilate(img, dilateRadius)
 
-    var mutex sync.Mutex
-    blockSize := 200 // Numero di colonne per blocco
-    numBlocks := (width + blockSize - 1) / blockSize
-    jobs := make(chan int, numBlocks)
-    results := make(chan bool, numBlocks)
-    numWorkers := 4
+	var mutex sync.Mutex
+	blockSize := 200 // Numero di colonne per blocco
+	numBlocks := (width + blockSize - 1) / blockSize
+	jobs := make(chan int, numBlocks)
+	results := make(chan bool, numBlocks)
+	numWorkers := 8
 
-    // Avvio dei worker
-    for w := 0; w < numWorkers; w++ {
-        go worker(w, jobs, results, img, labels, uf, &labelCount, unitPerc, blockSize, &mutex)
-    }
+	// Avvio dei worker
+	for w := 0; w < numWorkers; w++ {
+		go worker(w, jobs, results, preProcessedImage, labels, uf, &labelCount, unitPerc, blockSize, &mutex, searchDistance)
+	}
 
-    // Invio dei blocchi di lavoro
-    for block := 0; block < numBlocks; block++ {
-        jobs <- block
-    }
-    close(jobs)
+	// Invio dei blocchi di lavoro
+	for block := 0; block < numBlocks; block++ {
+		jobs <- block
+	}
+	close(jobs)
 
-    // Attendi che tutti i worker completino il loro lavoro
-    for i := 0; i < numBlocks; i++ {
-        <-results
-    }
+	// Attendi che tutti i worker completino il loro lavoro
+	for i := 0; i < numBlocks; i++ {
+		<-results
+	}
 
 	blobs := make(map[int][]image.Point)
 	for x := 0; x < width; x++ {
@@ -396,64 +397,75 @@ func FindLargestBlob(img image.Image) image.Rectangle {
 		}
 	}
 
-    log.Printf("Number of blobs before removing sparse lines: %d", len(blobs))
-    blobs = RemoveSparseLines(blobs, 30)
-    log.Printf("Number of blobs after removing sparse lines: %d", len(blobs))
+	log.Printf("Number of blobs before removing sparse lines: %d", len(blobs))
+	blobs = RemoveSparseLines(blobs, 30)
+	log.Printf("Number of blobs after removing sparse lines: %d", len(blobs))
 
-    unitPerc = 13.0 / float32(len(blobs))
+	unitPerc = 13.0 / float32(len(blobs))
 
-    maxPixelCount := 0
-    var largestBlobRect image.Rectangle
-    for label, blob := range blobs {
-        percCompletion += unitPerc
-        RaiseOnProcessing(int(percCompletion))
-        log.Printf("Blob %d size: %d", label, len(blob))
+	maxPixelCount := 0
+	var largestBlobRect image.Rectangle
+	for label, blob := range blobs {
+		percCompletion += unitPerc
+		RaiseOnProcessing(int(percCompletion))
+		log.Printf("Blob %d size: %d", label, len(blob))
 
-        boundingRect := GetBoundingRectangle(blob)
-        if len(blob) > maxPixelCount {
-            maxPixelCount = len(blob)
-            largestBlobRect = boundingRect
-        }
-    }
+		boundingRect := GetBoundingRectangle(blob)
+		if len(blob) > maxPixelCount {
+			maxPixelCount = len(blob)
+			largestBlobRect = boundingRect
+		}
+	}
 	log.Printf("Tempo esecuzione: %v secondi", time.Since(start).Seconds())
-    return largestBlobRect
+	return largestBlobRect
 }
 
-func worker(id int, jobs <-chan int, results chan<- bool, img image.Image, labels [][]int, uf *UnionFind, labelCount *int32, unitPerc float32, blockSize int, mutex *sync.Mutex) {
-    bounds := img.Bounds()
-    width := bounds.Dx()
-    height := bounds.Dy()
+func worker(id int, jobs <-chan int, results chan<- bool, img image.Image, labels [][]int, uf *UnionFind, labelCount *int32, unitPerc float32, blockSize int, mutex *sync.Mutex, searchDistance int) {
+	_ = id
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
 
-    for block := range jobs {
-        start := block * blockSize
-        end := start + blockSize
-        if end > width {
-            end = width
-        }
+	for block := range jobs {
+		start := block * blockSize
+		end := start + blockSize
+		if end > width {
+			end = width
+		}
 
-        for x := start; x < end; x++ {
+		for x := start; x < end; x++ {
 			mutex.Lock()
-            percCompletion += unitPerc
-            RaiseOnProcessing(int(percCompletion))
+			percCompletion += unitPerc
+			RaiseOnProcessing(int(percCompletion))
 			mutex.Unlock()
 
-            for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-                gray, _, _, _ := img.At(x, y).RGBA()
-                if uint8(gray>>8) == 0 { // Verifica se il valore del pixel grigio è 0
+			for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+				gray, _, _, _ := img.At(x, y).RGBA()
+				if uint8(gray>>8) == 0 { // Verifica se il valore del pixel grigio è 0
 					label := int(atomic.LoadInt32(labelCount))
-                    neighborLabels := []int{}
-                    if x > 0 && labels[x-1][y] != 0 {
-                        neighborLabels = append(neighborLabels, labels[x-1][y])
-                    }
-                    if y > 0 && labels[x][y-1] != 0 {
-                        neighborLabels = append(neighborLabels, labels[x][y-1])
-                    }
-                    if x < width-1 && labels[x+1][y] != 0 {
-                        neighborLabels = append(neighborLabels, labels[x+1][y])
-                    }
-                    if y < height-1 && labels[x][y+1] != 0 {
-                        neighborLabels = append(neighborLabels, labels[x][y+1])
-                    }
+					neighborLabels := []int{}
+
+					for dy := -searchDistance; dy <= searchDistance; dy++ {
+						for dx := -searchDistance; dx <= searchDistance; dx++ {
+							nx, ny := x+dx, y+dy
+							if nx >= 0 && nx < width && ny >= 0 && ny < height && labels[nx][ny] != 0 {
+								neighborLabels = append(neighborLabels, labels[nx][ny])
+							}
+						}
+					}
+
+					// if x > 0 && labels[x-1][y] != 0 {
+					//     neighborLabels = append(neighborLabels, labels[x-1][y])
+					// }
+					// if y > 0 && labels[x][y-1] != 0 {
+					//     neighborLabels = append(neighborLabels, labels[x][y-1])
+					// }
+					// if x < width-1 && labels[x+1][y] != 0 {
+					//     neighborLabels = append(neighborLabels, labels[x+1][y])
+					// }
+					// if y < height-1 && labels[x][y+1] != 0 {
+					//     neighborLabels = append(neighborLabels, labels[x][y+1])
+					// }
 
 					if len(neighborLabels) > 0 {
 						label = neighborLabels[0]
@@ -472,12 +484,12 @@ func worker(id int, jobs <-chan int, results chan<- bool, img image.Image, label
 					}
 
 					labels[x][y] = label
-                    
-                }
-            }
-        }
-        results <- true
-    }
+
+				}
+			}
+		}
+		results <- true
+	}
 }
 
 func MergeLabels(neighborLabels []int, smallestLabel int, labels [][]int, blobs map[int][]image.Point) {
@@ -494,6 +506,62 @@ func MergeLabels(neighborLabels []int, smallestLabel int, labels [][]int, blobs 
 			}
 		}
 	}
+}
+
+func erodeAndDilate(img image.Image, radius int) image.Image {
+	bounds := img.Bounds()
+	//eroded := image.NewGray(bounds)
+	dilated := image.NewRGBA(bounds)
+
+	white := color.RGBA{255, 255, 255, 255}
+	draw.Draw(dilated, bounds, &image.Uniform{white}, image.Point{}, draw.Src)
+	
+	//Accedo ai pixel direttamente per incrementare la performance
+	src := img.(*image.NRGBA)
+
+	//Erosione
+	// for y := bounds.Min.Y + radius; y < bounds.Max.Y-radius; y++ {
+	// 	for x := bounds.Min.X + radius; x < bounds.Max.X-radius; x++ {
+	// 		min := uint8(250)
+	// 		for dy := -radius; dy <= radius; dy++ {
+	// 			for dx := -radius; dx <= radius; dx++ {
+	// 				// Controlla direttamente se il pixel è nero o bianco
+	// 				if grayColor, ok := img.At(x+dx, y+dy).(color.Gray); ok {
+	// 					if grayColor.Y >= min {
+	// 						min = grayColor.Y
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 		eroded.SetGray(x, y, color.Gray{Y: min})
+	// 	}
+	// }
+
+	
+	//Dilatazione
+	for y := bounds.Min.Y + radius; y < bounds.Max.Y-radius; y++ {
+		for x := bounds.Min.X + radius; x < bounds.Max.X-radius; x++ {
+			// Verifica se il pixel corrente è nero
+			r, g, b, _ := src.NRGBAAt(x, y).RGBA()
+			isBlack := r>>8 == 0 && g>>8 == 0 && b>>8 == 0
+
+			if isBlack {
+				// Dilata i pixel neri
+				for dy := -radius; dy <= radius; dy++ {
+					for dx := -radius; dx <= radius; dx++ {
+						xx := x + dx
+						yy := y + dy
+						if xx >= bounds.Min.X && xx < bounds.Max.X && yy >= bounds.Min.Y && yy < bounds.Max.Y {
+							dilated.SetRGBA(xx, yy, color.RGBA{0, 0, 0, 255})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	//saveImage(dilated, "C:\\IPZS_PE\\binarized_image_2.png")
+	return dilated
 }
 
 func GetBoundingRectangle(points []image.Point) image.Rectangle {
@@ -554,7 +622,6 @@ func RemoveSparseLines(blobs map[int][]image.Point, threshold int) map[int][]ima
 
 	return refinedBlobs
 }
-
 
 func max(a, b int) int {
 	if a > b {
